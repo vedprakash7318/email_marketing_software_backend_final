@@ -126,6 +126,23 @@ router.post('/upload', upload.single('file'), async (req, res) => {
   }
 });
 
+// @desc    Delete all contacts
+// @route   DELETE /api/contacts/all
+router.delete('/all', async (req, res) => {
+  try {
+    const groupId = req.query.groupId;
+    if (groupId) {
+      await Contact.deleteMany({ groups: groupId });
+      res.json({ message: 'Contacts in group removed' });
+    } else {
+      await Contact.deleteMany({});
+      res.json({ message: 'All contacts removed' });
+    }
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
 // @desc    Delete contact
 // @route   DELETE /api/contacts/:id
 router.delete('/:id', async (req, res) => {

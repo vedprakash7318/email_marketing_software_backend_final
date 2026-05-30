@@ -2,6 +2,8 @@ const nodemailer = require('nodemailer');
 const Account = require('../models/Account');
 const Log = require('../models/Log');
 const Campaign = require('../models/Campaign');
+const fs = require('fs');
+const path = require('path');
 
 // Simple in-memory queue
 class InMemoryQueue {
@@ -114,15 +116,67 @@ class InMemoryQueue {
 
       let personalizedBody = bodyHtml.replace(/{{name}}/g, contactName || 'Subscriber');
       
+      // Convert newlines to <br> to preserve textarea formatting if no HTML tags are used
+      if (!personalizedBody.includes('<br') && !personalizedBody.includes('<p>') && !personalizedBody.includes('<div')) {
+        personalizedBody = personalizedBody.replace(/\n/g, '<br />');
+      }
+      
       // Unsubscribe Link Generation
       const backendUrl = process.env.BACKEND_URL || 'http://localhost:5000';
       const unsubscribeUrl = `${backendUrl}/unsubscribe/${encodeURIComponent(contactEmail)}`;
       
-      const unsubscribeHtml = `<br><br><div style="font-size: 12px; color: #888; text-align: center; margin-top: 20px; border-top: 1px solid #ddd; padding-top: 10px;">
-        You are receiving this email because you opted in. If you no longer wish to receive these emails, you can <a href="${unsubscribeUrl}" style="color: #888; text-decoration: underline;">unsubscribe here</a>.
-      </div>`;
+      const unsubscribeHtml = `<p style="font-size: 11px; color: #999; margin-top: 30px; font-family: Arial, sans-serif;">
+        You are receiving this email because you opted in. <a href="${unsubscribeUrl}" style="color: #666; text-decoration: underline;">Unsubscribe</a>
+      </p>`;
       
-      personalizedBody += unsubscribeHtml;
+      // Clean, Inbox-Friendly Wrapper
+      personalizedBody = `
+        <style>
+          p { margin: 0; padding: 0; }
+          ul, ol { padding-left: 20px; margin: 0; }
+          li { margin-bottom: 0; }
+          img { max-width: 100%; height: auto; }
+        </style>
+        ${personalizedBody}
+        ${unsubscribeHtml}
+      `;
+
+      let finalAttachments = [];
+
+      if (attachments && attachments.length > 0) {
+        finalAttachments = attachments.map(att => ({
+          filename: att.filename,
+          path: att.path
+        }));
+      }
+
+      // Convert images with local URLs to embedded CID attachments
+      const imgRegex = /<img[^>]+src="([^">]+)"/g;
+      let match;
+      
+      while ((match = imgRegex.exec(personalizedBody)) !== null) {
+        const srcUrl = match[1];
+        
+        // If the URL is our backend URL (e.g., http://localhost:5000/uploads/...)
+        if (srcUrl.startsWith(backendUrl + '/uploads/')) {
+          const filename = srcUrl.split('/').pop();
+          const filePath = path.join(__dirname, '..', 'uploads', filename);
+          
+          if (fs.existsSync(filePath)) {
+            const cid = 'img_' + filename;
+            
+            // Add to attachments as inline
+            finalAttachments.push({
+              filename: filename,
+              path: filePath,
+              cid: cid
+            });
+            
+            // Replace the URL in the HTML with cid:...
+            personalizedBody = personalizedBody.replace(srcUrl, `cid:${cid}`);
+          }
+        }
+      }
 
       // Plain Text Fallback (Regex to strip HTML)
       const plainTextFallback = personalizedBody
@@ -139,14 +193,8 @@ class InMemoryQueue {
         subject: subject,
         html: personalizedBody,
         text: plainTextFallback,
+        attachments: finalAttachments
       };
-
-      if (attachments && attachments.length > 0) {
-        mailOptions.attachments = attachments.map(att => ({
-          filename: att.filename,
-          path: att.path
-        }));
-      }
 
       await transporter.sendMail(mailOptions);
 
